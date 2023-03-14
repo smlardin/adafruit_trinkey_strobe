@@ -6,6 +6,7 @@
 
 // Create the neopixel strip with the built in definitions NUM_NEOPIXEL and PIN_NEOPIXEL
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_NEOPIXEL, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+Adafruit_FreeTouch qt = Adafruit_FreeTouch(PIN_TOUCH, OVERSAMPLE_4, RESISTOR_50K, FREQ_MODE_NONE);
 
 int16_t neo_brightness = 255; // initialize with max so no PWM on the LEDs
 
@@ -22,12 +23,14 @@ uint8_t led_click = 0;
 
 #define DELAY_10US    480              // 10us
 #define DELAY_80US    3840             // 80us
-#define DELAY_90US    4320             // 90us
+#define DELAY_90US    4322             // 90us
 #define DELAY_100US   4800             // 100us
 #define DELAY_125US   6000             // 125us 1/8000
 #define DELAY_150US   7200             // 150us 
 #define DELAY_175US   8400             // 175us
 #define DELAY_200US   9600             // 200us
+#define DELAY_500US   24000            // 500us
+#define DELAY_1MS     48000            // 1ms
 
 typedef struct {
   uint16_t  clock_delay;
@@ -40,12 +43,15 @@ static const run_mode_t modes[] = {
   { DELAY_100US,  5, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFFFF, 0x00000000,                                                                                  },  
   { DELAY_100US,  2, 0x00FFFFFF, 0x00000000,                                                                                                                      },  
   { DELAY_200US,  2, 0x00FFFF00, 0x00000000,                                                                                                                      },  
-  { DELAY_90US,   2, 0X00FF0000, 0X00000000,                                                                                                                      },  
+  { DELAY_100US,  2, 0X00FF0000, 0X00000000,                                                                                                                      },  
   { DELAY_125US, 12, 0x0000FF00, 0x00000000, 0x00FFFFFF, 0x00000000, 0x000000FF, 0x00000000, 0x00FFFFFF, 0x00000000, 0x00FF0000, 0x00000000, 0x00FFFFFF, 0x000000 },  
-  { DELAY_90US,   2, 0X0000FF00, 0X00000000,                                                                                                                      },  
+  { DELAY_100US,  2, 0X0000FF00, 0X00000000,                                                                                                                      },  
   { DELAY_150US, 10, 0x000000FF, 0x00000000, 0x0000FF00, 0x00000000, 0x00FF0000, 0x00000000, 0x0000FFFF, 0x00000000, 0x00FFFFFF, 0x00000000                       },  
-  { DELAY_90US,   2, 0X000000FF, 0X00000000,                                                                                                                      },  
+  { DELAY_100US,  2, 0X000000FF, 0X00000000,                                                                                                                      },  
   { DELAY_175US, 10, 0x00FFFFFF, 0x00000000, 0x0000FF00, 0x00000000, 0x0000FFFF, 0x00000000, 0x00FF0000, 0x00000000, 0x000000FF, 0x00000000                       },  
+  { DELAY_100US, 10, 0x00FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000                       },
+  { DELAY_500US,  4, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFFFF                                                                                               },
+  { DELAY_1MS,    8, 0x00FF0000, 0x00FFFF00, 0x0000FF00, 0x0000FFFF, 0x000000FF, 0x00FF00FF, 0x00FFFFFF, 0x00000000                                               },
 };
 
 #define MODES (sizeof(modes)/sizeof(run_mode_t))
@@ -63,11 +69,12 @@ void setup()
   strip.setPixelColor( 0, modes[0].colors[0] );
   strip.show(); 
 
+  qt.begin();
+
 #ifdef USE_SERIAL
   Serial.println("Starting");
 #endif
 
-  //pinMode(PIN_SWITCH, INPUT_PULLDOWN);
   pinMode(PIN_SWITCH, OUTPUT );
   digitalWrite(PIN_SWITCH, 1);
 
@@ -91,7 +98,7 @@ void setup()
   TC3->COUNT16.CTRLA.bit.WAVEGEN = 1; // CC0 used for top
   TC3->COUNT16.CTRLA.bit.ENABLE = 1;  
 
-  // Sends a clean report to the host. This is important on any Arduino type.
+    // Sends a clean report to the host. This is important on any Arduino type.
   BootKeyboard.begin();
 }
 
@@ -135,8 +142,12 @@ void ledBlink()
   }
 }
 
+uint8_t touch_debounce = 0;
+
 void usbKeyboardConfig()
 {
+  uint16_t touch = qt.measure();
+
   // mimic an led
   led_current = (BootKeyboard.getLeds() & 0x2);
 
@@ -147,7 +158,7 @@ void usbKeyboardConfig()
 #endif
 
   if (led_current != led_last) {
-    if (!led_current && (led_change < 40)) 
+    if (!led_current && (led_change < 20)) 
       led_click = 1;
     led_change = 0;
   }
@@ -166,6 +177,20 @@ void usbKeyboardConfig()
     led_click = 0;
   }
 
+  // touching to change modes
+  touch_debounce = (touch_debounce << 1) | ((touch > 500)?1:0);
+  if (touch_debounce == 0x1F)
+  {
+    mode = (mode + 1) % MODES;
+    led_change = 0;
+  }
+  else if ((touch_debounce == 0x3F) || (touch_debounce == 0x7F) || (touch_debounce == 0xFF))
+  {
+    strip.setPixelColor( 0, 0 );
+    strip.show();
+    led_change = 0;
+  }
+
   mode_index = (mode_index + 1) % modes[mode].frames;
   strip.setPixelColor( 0, modes[mode].colors[mode_index] );
   strip.show();
@@ -180,5 +205,5 @@ void loop()
     ledBlink();
   }
 
-  delay(60);
+  delay(100);
 }
